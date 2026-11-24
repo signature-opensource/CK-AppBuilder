@@ -83,7 +83,7 @@ static class AppBuilderAspects
         if( !success ) return false;
         foreach( var (name, (type, attr, apps)) in builderAspects.OrderBy( kv => kv.Key, StringComparer.OrdinalIgnoreCase ) )
         {
-            if( !TryCreate<IAppBuilderAspectApply>( monitor, context, sets.TypeCache, "Builder aspect", name, type, attr, context.Aspects, allOptions, out var aspect ) )
+            if( !TryCreate<IAppBuilderAspectApply>( monitor, context, sets.TypeCache, "Builder aspect", name, type, attr, context.Aspects, allOptions, t => FindMissingAspect( t, null ), out var aspect ) )
             {
                 success = false;
                 continue;
@@ -98,7 +98,7 @@ static class AppBuilderAspects
         {
             foreach( var (name, (type, attr)) in aspects.OrderBy( kv => kv.Key, StringComparer.OrdinalIgnoreCase ) )
             {
-                if( !TryCreate<IAppAspectApply>( monitor, context, sets.TypeCache, $"App aspect of {app}", name, type, attr, app.Aspects, appOptions.GetValueOrDefault( app ) ?? [], out var aspect ) )
+                if( !TryCreate<IAppAspectApply>( monitor, context, sets.TypeCache, $"App aspect of {app}", name, type, attr, app.Aspects, appOptions.GetValueOrDefault( app ) ?? [], t => FindMissingAspect( t, app ), out var aspect ) )
                 {
                     success = false;
                     continue;
@@ -111,6 +111,33 @@ static class AppBuilderAspects
             }
         }
         return success;
+
+        // An option of an aspect can require an aspect (its level or above: a Builder aspect, an App aspect of its App):
+        // "only with it", the required aspect must be present. Names the missing one, null when it is present.
+        string? FindMissingAspect( Type required, AppConfiguration? app )
+        {
+            foreach( var (name, (type, attr, _)) in builderAspects )
+            {
+                if( required.IsAssignableFrom( type.Type ) ) return IsPresent( context.Aspects, attr ) ? null : $"the Builder aspect '{name}'";
+            }
+            if( app != null && appAspects.TryGetValue( app, out var forApp ) )
+            {
+                foreach( var (name, (type, attr)) in forApp )
+                {
+                    if( required.IsAssignableFrom( type.Type ) ) return IsPresent( app.Aspects, attr ) ? null : $"the App aspect '{name}'";
+                }
+            }
+            return $"'{required.ToCSharpName()}' (not an aspect of {(app != null ? app.ToString() : "the builder")})";
+        }
+    }
+
+    // The rule of TryCreate: an aspect is present when its key is true or a section, or without key when it is not
+    // optional (false: absent).
+    static bool IsPresent( AppAspects aspects, IConfigurableTypeAttribute attr )
+    {
+        var section = aspects.TryGetAspect( attr.Name );
+        if( section != null && section.Value != null && bool.TryParse( section.Value, out var on ) ) return on;
+        return section != null || attr.Activation != TypeActivation.Optional;
     }
 
     // The aspect is present when its key is declared (true or its section) or when it is not optional, unless its key is
@@ -124,6 +151,7 @@ static class AppBuilderAspects
                               IConfigurableTypeAttribute attr,
                               AppAspects aspects,
                               IReadOnlyList<ConfigurableOptionModel> options,
+                              Func<Type, string?> findMissingAspect,
                               out T? aspect ) where T : class
     {
         aspect = null;
@@ -206,7 +234,14 @@ static class AppBuilderAspects
             var ordered = ConfigurableOptions.TryOrder( monitor, typeCache, context.EngineConfiguration.RevertOrderingNames, type.Type, applicable );
             if( ordered == null ) return false;
             var infos = ordered.Select( o => new AspectOption( o ) ).ToList();
-            if( !ConfigurationOptionSelector.TrySelect( monitor, infos, aspectSection, out var selected ) ) return false;
+            if( !ConfigurationOptionSelector.TrySelect( monitor,
+                                                        infos,
+                                                        aspectSection,
+                                                        out var selected,
+                                                        o => o.Ordered.RequiredTypes.Select( findMissingAspect ).FirstOrDefault( m => m != null ) ) )
+            {
+                return false;
+            }
             if( selected.Count > 0 )
             {
                 if( optionsItemType == null )

@@ -37,6 +37,12 @@ public sealed class HeaderAspectOption : IAppAspectOption<TestAppAspect>
 }
 
 // Enabled only when the aspect's section says so; it comes before Header (an optional relation orders, it doesn't require).
+// Requires the "Modeled" App aspect (outside the options of its owner: "only with it").
+[AppAspectOption( "Linked", TypeActivation.ByDefault ), Requires<ModeledAppAspect>]
+public sealed class LinkedAspectOption : IAppAspectOption<TestAppAspect>
+{
+}
+
 [AppAspectOption( "Main", TypeActivation.Optional )]
 [OptionalRequiredBy<HeaderAspectOption>]
 public sealed class MainAspectOption : IAppAspectOption<TestAppAspect>
@@ -83,7 +89,7 @@ public class AppBuilderAspectOptionsTests
     static AppBuilderContext? Run( string aspects )
     {
         var engine = new EngineConfiguration();
-        foreach( var t in new[] { typeof( TestAppAspect ), typeof( HeaderAspectOption ), typeof( MainAspectOption ), typeof( ModeledAppAspect ) } ) engine.FirstBinPath.Types.Add( t );
+        foreach( var t in new[] { typeof( TestAppAspect ), typeof( HeaderAspectOption ), typeof( MainAspectOption ), typeof( ModeledAppAspect ), typeof( LinkedAspectOption ) } ) engine.FirstBinPath.Types.Add( t );
         var sets = BinPathTypeGroup.Run( TestHelper.Monitor, engine ).ShouldNotBeNull();
         sets.Success.ShouldBeTrue();
         var section = ImmutableConfigurationSection.CreateFromJson( "ckonf:Apps", "Sample", $$"""{ "Aspects": {{aspects}} }""" );
@@ -112,6 +118,27 @@ public class AppBuilderAspectOptionsTests
         // The aspect is optional: without its key, it is not created.
         Run( "{}" ).ShouldNotBeNull();
         TestAppAspect.Last.ShouldBeNull();
+    }
+
+    [Test]
+    public void an_option_can_require_an_aspect()
+    {
+        // Modeled is present: Linked (enabled by default) is enabled.
+        Run( """{ "Test": true, "Modeled": { "Level": 1 } }""" ).ShouldNotBeNull();
+        TestAppAspect.Last.ShouldNotBeNull().Options.Select( o => o.GetType() ).ShouldBe( [typeof( HeaderAspectOption ), typeof( LinkedAspectOption )], ignoreOrder: true );
+
+        // Modeled is absent: Linked is disabled with it, or an error when it is explicit.
+        using( TestHelper.Monitor.CollectTexts( out var texts ) )
+        {
+            Run( """{ "Test": true }""" ).ShouldNotBeNull();
+            TestAppAspect.Last.ShouldNotBeNull().Options.Select( o => o.GetType() ).ShouldBe( [typeof( HeaderAspectOption )] );
+            texts.ShouldContain( "The option 'Linked' (enabled by default) is disabled: it requires the App aspect 'Modeled' that is disabled." );
+        }
+        using( TestHelper.Monitor.CollectTexts( out var texts ) )
+        {
+            Run( """{ "Test": { "Linked": true } }""" ).ShouldBeNull();
+            texts.ShouldContain( "The option 'Linked' requires the App aspect 'Modeled' that is disabled." );
+        }
     }
 
     [Test]
