@@ -27,6 +27,9 @@ values per deployment of the deployments) and stops before the engine: no genera
 by every run). Its warnings and errors are written in the file, `{ "Success": false, "Entries": [ { "Level": "Error",
 "Text": "..." } ] }`, and an error is a non zero exit code. The configurator checks the documents it saves with it.
 
+A builder runs after its build (the `RunMeAfterBuild` target of `CK.AppBuilder.targets`): `-p:CKAppBuilderRunAfterBuild=false`
+builds it without running it (the check builds it this way, then runs it with `--check`).
+
 ## The contributors
 
 The builder finds the contributors (`[assembly: AppBuilderContributor( typeof( MyContributor ) )]`) in its own folder:
