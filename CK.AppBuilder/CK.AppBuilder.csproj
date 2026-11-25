@@ -18,6 +18,6 @@
   <ItemGroup>
     <PackageReference Include="CK.Monitoring" Version="28.0.0-0.uc.1" />
     <PackageReference Include="CK.ConfigurationModel" Version="0.0.0-0.uc.1" />
-    <PackageReference Include="CK.Engine" Version="37.0.0-0.uc.3" />
+    <PackageReference Include="CK.Engine" Version="37.0.0-0.uc.3.ci.68" />
   </ItemGroup>
 </Project>
