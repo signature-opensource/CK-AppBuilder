@@ -1,7 +1,7 @@
 <Project>
 
   <!-- The builder runs after its build, unless CKAppBuilderRunAfterBuild is false (the check of a configuration builds it,
-       then runs it with its "--check" argument). -->
+       then runs it with its check argument). -->
   <Target Name="RunMeAfterBuild" AfterTargets="PostBuildEvent" Condition="'$(CKAppBuilderRunAfterBuild)' != 'false'">
     <Delete Files="LastRun.log" />
     <Exec Command="&quot;$(MSBuildProjectDirectory)\$(OutputPath)$(AssemblyName).exe&quot;" />
