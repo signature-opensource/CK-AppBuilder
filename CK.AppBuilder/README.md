@@ -20,6 +20,13 @@ A builder generated for a deployment (by [CK.AppDeployment](../CK.AppDeployment/
 `ckonf.deployment.json`) writes its `ckonf.json` from the merged configuration of the deployment instead, never reads a
 secret (`AppBuilderContext.Deployment` is set), and writes the `Deployment.json` manifest of each of its hosts.
 
+**The check of the configuration:** `dotnet run --project X.Builder -- --check <file>` (`CKomposableAppBuilder.CheckArgument`)
+runs the builder up to the restrictions (the projection, the aspects, the contributors, the locks, the secrets and the
+values per deployment of the deployments) and stops before the engine: no generated code, no database setup, no
+`appsettings.json` of the hosts (the builder's own `ckonf.json` and the merged files of the deployments are written, as
+by every run). Its warnings and errors are written in the file, `{ "Success": false, "Entries": [ { "Level": "Error",
+"Text": "..." } ] }`, and an error is a non zero exit code. The configurator checks the documents it saves with it.
+
 ## The contributors
 
 The builder finds the contributors (`[assembly: AppBuilderContributor( typeof( MyContributor ) )]`) in its own folder:

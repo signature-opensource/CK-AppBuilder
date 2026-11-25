@@ -35,6 +35,13 @@ namespace CK.Setup;
 /// <para>
 /// Otherwise, if a <c>CKSetup.xml</c> exists in the "XXX.Builder" project, it automatically configures the <see cref="ICKomposableAppBuilder.EngineConfiguration"/>.
 /// </para>
+/// <para>
+/// With the arguments <c>--check &lt;file&gt;</c> (<see cref="CheckArgument"/>), the run only checks the configuration: it
+/// stops once the restrictions are applied (the projection, the aspects, the contributors, the locks, the secrets and the
+/// values per deployment of the deployments), before the <c>configure</c> function, the projections of the hosts and the
+/// engine run (no generated code, no database setup), and writes its warnings and errors in the file (see
+/// <see cref="CheckArgument"/>). The configurator checks the documents that it saves with it.
+/// </para>
 /// </para>
 /// </summary>
 public sealed class CKomposableAppBuilder : ICKomposableAppBuilder
@@ -76,6 +83,14 @@ public sealed class CKomposableAppBuilder : ICKomposableAppBuilder
 
     /// <inheritdoc />
     public EngineConfiguration EngineConfiguration => _engineConfiguration;
+
+    /// <summary>
+    /// The argument of the check of the configuration: <c>--check &lt;file&gt;</c>. The file is written with the result,
+    /// <c>{ "Success": true, "Entries": [ { "Level": "Warn", "Text": "..." }, ... ] }</c>: the warnings and the errors of the
+    /// run ("Warn", "Error" or "Fatal", the text of an exception appended to its entry's), in their order. The run fails
+    /// (<c>"Success": false</c>, a non zero exit code) when an error is logged.
+    /// </summary>
+    public const string CheckArgument = "--check";
 
     /// <summary>
     /// Shell method that handles the run of a setup from a ".App" to its ".Host" project.
@@ -129,6 +144,14 @@ public sealed class CKomposableAppBuilder : ICKomposableAppBuilder
         LogFile.RootLogPath = rootLogPath;
         GrandOutput.EnsureActiveDefault();
         var monitor = new ActivityMonitor();
+        var checkFile = GetCheckFile();
+        ActivityMonitorSimpleCollector? checkCollector = null;
+        if( checkFile != null )
+        {
+            checkCollector = new ActivityMonitorSimpleCollector { MinimalFilter = LogLevelFilter.Warn, Capacity = 2000 };
+            monitor.Output.RegisterClient( checkCollector );
+            monitor.Info( $"Checking the configuration only (the result is written in '{checkFile}')." );
+        }
         try
         {
             var parentPath = builderFolder.RemoveLastPart();
@@ -228,6 +251,8 @@ public sealed class CKomposableAppBuilder : ICKomposableAppBuilder
             {
                 configuration = new EngineConfiguration() { BasePath = builderFolder };
             }
+            // The check of the configuration stops here: the configuration is read, projected and checked.
+            if( checkFile != null ) return 0;
             var b = new CKomposableAppBuilder( parentPath, monitor, msBuildOutputPath, applicationName, builderFolder, configuration );
             if( configure is Func<IActivityMonitor, ICKomposableAppBuilder, Task> a )
             {
@@ -249,10 +274,43 @@ public sealed class CKomposableAppBuilder : ICKomposableAppBuilder
         }
         finally
         {
+            if( checkFile != null ) WriteCheckFile( checkFile, checkCollector! );
             monitor.MonitorEnd();
             var d = GrandOutput.Default;
             if( d != null ) await d.DisposeAsync().ConfigureAwait( false );
         }
+    }
+
+    static string? GetCheckFile()
+    {
+        var args = Environment.GetCommandLineArgs();
+        int i = Array.IndexOf( args, CheckArgument );
+        if( i < 0 ) return null;
+        if( i + 1 >= args.Length || string.IsNullOrWhiteSpace( args[i + 1] ) )
+        {
+            throw new ArgumentException( $"The argument {CheckArgument} is followed by the path of the result file." );
+        }
+        return Path.GetFullPath( args[i + 1] );
+    }
+
+    static void WriteCheckFile( string file, ActivityMonitorSimpleCollector collector )
+    {
+        var entries = collector.Entries;
+        var success = !entries.Any( e => e.MaskedLevel >= LogLevel.Error );
+        using var stream = File.Create( file );
+        using var w = new System.Text.Json.Utf8JsonWriter( stream, new System.Text.Json.JsonWriterOptions { Indented = true } );
+        w.WriteStartObject();
+        w.WriteBoolean( "Success", success );
+        w.WriteStartArray( "Entries" );
+        foreach( var e in entries )
+        {
+            w.WriteStartObject();
+            w.WriteString( "Level", e.MaskedLevel.ToString() );
+            w.WriteString( "Text", e.Exception != null ? $"{e.Text} {e.Exception.Message}" : e.Text );
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+        w.WriteEndObject();
     }
 
     CKomposableAppBuilder( NormalizedPath parentPath,
