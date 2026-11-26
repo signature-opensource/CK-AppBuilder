@@ -27,7 +27,10 @@ For each deployment and each AppContext that it deploys (`"Deployment": { "AppCo
    - the hosts of its Apps: a copy of the files that git tracks in the original ones (named like them), without
      `Properties`;
    - the `.App` projects are not copied: the project references of the copies are re-targeted on the originals (and on
-     the copied Builder for a host).
+     the copied Builder for a host);
+   - for an App to which the deployment adds packages (see below), a wrapper project next to the Builder, named like the
+     original `.App` folder (`Deployment/.build/Production/Front/Front.App/Front.App.Deployment.csproj`): it references the
+     original `.App` project and the added packages, and the copies reference it instead of the original.
 
    The outputs of a previous run (`bin`, `obj`, `node_modules`, the installed packages of the client applications: their
    yarn cache and Plug'n'Play files) are kept: the builds are incremental. A failing
@@ -44,6 +47,37 @@ For each deployment and each AppContext that it deploys (`"Deployment": { "AppCo
    its bases, the publication properties, the names of the secrets that the host needs (given at deploy time: the
    `Secrets` section of the host's configuration), the values per deployment (its addresses, its public URLs), the
    instances of a fleet.
+
+## The packages that a deployment adds to an App
+
+A deployment can add packages to an App: the App of the solution doesn't reference them, the deployed one does (a
+desktop packaging of a web application, for instance). The deployment names them, the script gives their versions:
+
+```jsonc
+// Deployment/#Production/ckonf.json
+"Deployment": { "Apps": { "$Front": { "Packages": [ "Some.Extension" ] } } }
+```
+
+```csharp
+// Deployment/GenerateAssets.cs
+#:package CK.AppDeployment@x.y.z
+//ck-package Some.Extension@x.y.z
+return await CK.Setup.AppDeployment.RunAsync( args );
+```
+
+- **The version is the one of the World:** a `//ck-package Name@Version` line is a comment for `dotnet` (nothing is
+  restored for the script), and a package reference of the solution for CKli (it orders the builds, is upgraded to the
+  World's version, and a new version of the package triggers a build of the solution). An added package without its line
+  is an error, so is a line without version.
+- **The wrapper project** references the original `.App` project and the added packages and copies them to its output:
+  the generated Builder uses it as the `.App` project of the App (`CentralDeployment.GetAppProjectFolder`), so the
+  BinPath of the App has both, and the host references it. Its own assembly has no code: the engine ignores it.
+- **What a package does is its own business:** its types and its aspects (the Builder applies them), its MSBuild files
+  (`buildTransitive`: they reach the host through the wrapper). CK.AppDeployment only adds it.
+- **The App must discover its folder:** an App whose type set is restricted (`"Assemblies"` or `"Types"`) would ignore
+  the added packages, so it is an error.
+
+## What the build of a deployment never does
 
 The build of a deployment never writes in the `#Dev` folder, never reads a secret and never sets up a database: an
 AppContext whose engine sets up a database at build time (the SqlServer aspect) fails, it must be left out of the

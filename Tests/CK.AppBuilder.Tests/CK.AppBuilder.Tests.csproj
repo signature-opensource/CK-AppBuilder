@@ -10,5 +10,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\CK.AppBuilder\CK.AppBuilder.csproj" />
+    <ProjectReference Include="..\..\CK.AppDeployment\CK.AppDeployment.csproj" />
   </ItemGroup>
 </Project>

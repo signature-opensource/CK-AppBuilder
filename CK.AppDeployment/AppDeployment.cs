@@ -127,11 +127,13 @@ public static partial class AppDeployment
         if( tracked == null ) return false;
         var informationalVersion = await GetInformationalVersionAsync( monitor, central.RootFolder, version ).ConfigureAwait( false );
         if( informationalVersion == null ) return false;
+        var packageVersions = ReadPackageVersions( monitor, deploymentFolder.AppendPart( ScriptFileName ) );
+        if( packageVersions == null ) return false;
         foreach( var d in deployments )
         {
             using( monitor.OpenInfo( $"Building the deployment '{d.Name}' (asset '{d.AssetName}')." ) )
             {
-                if( !await BuildAsync( monitor, central, d, version, informationalVersion, work.AppendPart( d.AssetName ), deploymentFolder.AppendPart( AssetsFolderName ), tracked ).ConfigureAwait( false ) )
+                if( !await BuildAsync( monitor, central, d, version, informationalVersion, work.AppendPart( d.AssetName ), deploymentFolder.AppendPart( AssetsFolderName ), tracked, packageVersions ).ConfigureAwait( false ) )
                 {
                     return false;
                 }
@@ -147,7 +149,8 @@ public static partial class AppDeployment
                                         string informationalVersion,
                                         NormalizedPath work,
                                         NormalizedPath assets,
-                                        IReadOnlyList<string> tracked )
+                                        IReadOnlyList<string> tracked,
+                                        IReadOnlyDictionary<string, string> packageVersions )
     {
         var hosts = new List<(NormalizedPath Project, CentralApp App)>();
         foreach( var b in deployment.DeployedAppContexts )
@@ -177,6 +180,17 @@ public static partial class AppDeployment
                 }
                 var hostProject = FindProject( monitor, o.HostProjectFolder );
                 if( hostProject == null ) return false;
+                // The packages that the deployment adds to the App: a wrapper project references the original ".App"
+                // project and them; the generated Builder and host reference the wrapper instead of the original.
+                var packages = deployment.Settings.GetPackages( o.Name );
+                if( packages.Count > 0 )
+                {
+                    var appProject = FindProject( monitor, o.AppProjectFolder );
+                    if( appProject == null ) return false;
+                    var wrapper = WriteWrapperProject( monitor, deployment, a, appProject.Value, deployment.GetAppProjectFolder( builderFolder, o ), packages, packageVersions );
+                    if( wrapper == null ) return false;
+                    copies.Add( appProject.Value, wrapper.Value );
+                }
                 // Next to the generated Builder, named like the original (its projection says so).
                 var copy = builderFolder.RemoveLastPart().AppendPart( o.HostProjectFolder.LastPart );
                 var copiedProject = copy.AppendPart( Path.GetFileName( hostProject ) );
@@ -259,6 +273,129 @@ public static partial class AppDeployment
         group.Append( "  </PropertyGroup>" ).Append( nl );
         File.WriteAllText( project, text.Substring( 0, end ) + group + text.Substring( end ) );
     }
+
+    /// <summary>
+    /// The file-based app that CKli runs in the "Deployment" folder and that calls <see cref="RunAsync(string[])"/>: its
+    /// <c>//ck-package Name@Version</c> lines give the versions of the packages that the deployments add to their Apps.
+    /// </summary>
+    public const string ScriptFileName = "GenerateAssets.cs";
+
+    // "//ck-package Name@Version": a line comment ("dotnet" ignores it, nothing is restored for the script), a first class
+    // reference for CKli (it orders the builds, is upgraded to the World's version and triggers a build).
+    [GeneratedRegex( @"^[ \t]*//ck-package[ \t]+(?<id>[^@\s]+)(?:@(?<version>[^\s]*))?[ \t]*\r?$", RegexOptions.Multiline | RegexOptions.CultureInvariant )]
+    private static partial Regex CKPackageDirective();
+
+    /// <summary>
+    /// Reads the <c>//ck-package Name@Version</c> lines of the script: the versions of the packages that the deployments
+    /// add to their Apps. A missing script gives no version; a line without version is an error.
+    /// </summary>
+    /// <param name="monitor">The monitor to use.</param>
+    /// <param name="script">The path of the script.</param>
+    /// <returns>The versions by package identifier, or null on error.</returns>
+    internal static Dictionary<string, string>? ReadPackageVersions( IActivityMonitor monitor, NormalizedPath script )
+    {
+        var result = new Dictionary<string, string>( StringComparer.OrdinalIgnoreCase );
+        if( !File.Exists( script ) ) return result;
+        bool success = true;
+        foreach( Match m in CKPackageDirective().Matches( File.ReadAllText( script ) ) )
+        {
+            var id = m.Groups["id"].Value;
+            var v = m.Groups["version"];
+            if( !v.Success || v.Length == 0 )
+            {
+                monitor.Error( $"Invalid '//ck-package {id}' in '{script}': a version is required ('//ck-package {id}@<version>')." );
+                success = false;
+            }
+            else if( result.TryGetValue( id, out var other ) && other != v.Value )
+            {
+                monitor.Error( $"'{script}' has two versions of '{id}': '{other}' and '{v.Value}'." );
+                success = false;
+            }
+            else result[id] = v.Value;
+        }
+        return success ? result : null;
+    }
+
+    /// <summary>
+    /// Writes the wrapper project of an App to which a deployment adds packages, in the folder that
+    /// <see cref="CentralDeployment.GetAppProjectFolder"/> gives (named like the original ".App" folder: the BinPath of the
+    /// App is named after it): it references the original ".App" project and the added packages, and copies them to its
+    /// output, so that the Builder sees both. Its own assembly has no code: the engine ignores it.
+    /// </summary>
+    /// <param name="monitor">The monitor to use.</param>
+    /// <param name="deployment">The deployment.</param>
+    /// <param name="app">The deployed App.</param>
+    /// <param name="appProject">The original ".App" project.</param>
+    /// <param name="folder">The folder of the wrapper.</param>
+    /// <param name="packages">The packages that the deployment adds to the App.</param>
+    /// <param name="packageVersions">The versions of the <c>//ck-package</c> lines of the script.</param>
+    /// <returns>The wrapper project, or null on error.</returns>
+    internal static NormalizedPath? WriteWrapperProject( IActivityMonitor monitor,
+                                                        CentralDeployment deployment,
+                                                        CentralApp app,
+                                                        NormalizedPath appProject,
+                                                        NormalizedPath folder,
+                                                        IReadOnlyList<string> packages,
+                                                        IReadOnlyDictionary<string, string> packageVersions )
+    {
+        bool success = true;
+        // A restricted type set doesn't discover the folder of the App: the added packages would be ignored.
+        foreach( var key in new[] { "Assemblies", "Types" } )
+        {
+            if( app.Configuration.TryGetSection( key ) != null )
+            {
+                monitor.Error( $"The deployment '{deployment.Name}' adds packages to the {app}, but the App has \"{key}\": its type set doesn't discover the folder of the App, the added packages would be ignored." );
+                success = false;
+            }
+        }
+        var references = new List<(string Id, string Version)>();
+        foreach( var p in packages )
+        {
+            if( packageVersions.TryGetValue( p, out var v ) ) references.Add( (p, v) );
+            else
+            {
+                monitor.Error( $"The deployment '{deployment.Name}' adds the package '{p}' to the {app}, but the script '{ScriptFileName}' has no '//ck-package {p}@<version>' line: the version of an added package is the one of the World (CKli upgrades the line)." );
+                success = false;
+            }
+        }
+        var targetFramework = TargetFramework().Match( File.ReadAllText( appProject ) );
+        if( !targetFramework.Success )
+        {
+            monitor.Error( $"No <TargetFramework> in '{appProject}': the wrapper project of the {app} targets the framework of its \".App\" project." );
+            success = false;
+        }
+        if( !success ) return null;
+        var project = folder.AppendPart( folder.LastPart + CentralDeployment.WrapperProjectSuffix + ".csproj" );
+        Directory.CreateDirectory( folder );
+        // A previous wrapper of another name (the outputs and the caches of the incremental builds are kept).
+        foreach( var f in Directory.GetFiles( folder ) )
+        {
+            if( !_keptFiles.Contains( Path.GetFileName( f ), StringComparer.OrdinalIgnoreCase ) && f != project.Path.Replace( '/', Path.DirectorySeparatorChar ) ) File.Delete( f );
+        }
+        var nl = Environment.NewLine;
+        var text = new System.Text.StringBuilder();
+        text.Append( "<!-- Written by CK.AppDeployment: the " ).Append( System.Security.SecurityElement.Escape( app.ToString() ) )
+            .Append( " and the packages that the deployment '" ).Append( System.Security.SecurityElement.Escape( deployment.Name ) ).Append( "' adds to it. -->" ).Append( nl )
+            .Append( "<Project Sdk=\"Microsoft.NET.Sdk\">" ).Append( nl )
+            .Append( "  <PropertyGroup>" ).Append( nl )
+            .Append( "    <TargetFramework>" ).Append( targetFramework.Groups[1].Value.Trim() ).Append( "</TargetFramework>" ).Append( nl )
+            .Append( "    <IsPackable>false</IsPackable>" ).Append( nl )
+            .Append( "    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>" ).Append( nl )
+            .Append( "  </PropertyGroup>" ).Append( nl )
+            .Append( "  <ItemGroup>" ).Append( nl )
+            .Append( "    <ProjectReference Include=\"" ).Append( Path.GetRelativePath( folder, appProject ) ).Append( "\" />" ).Append( nl );
+        foreach( var (id, version) in references )
+        {
+            text.Append( "    <PackageReference Include=\"" ).Append( id ).Append( "\" Version=\"" ).Append( version ).Append( "\" />" ).Append( nl );
+        }
+        text.Append( "  </ItemGroup>" ).Append( nl ).Append( "</Project>" ).Append( nl );
+        File.WriteAllText( project, text.ToString() );
+        monitor.Info( $"Wrapper project '{project}' written: the {app} and '{references.Select( r => $"{r.Id}@{r.Version}" ).Concatenate( "', '" )}'." );
+        return project;
+    }
+
+    [GeneratedRegex( "<TargetFramework>([^<]+)</TargetFramework>" )]
+    private static partial Regex TargetFramework();
 
     // The single ".csproj" of a project folder.
     static NormalizedPath? FindProject( IActivityMonitor monitor, NormalizedPath folder )
