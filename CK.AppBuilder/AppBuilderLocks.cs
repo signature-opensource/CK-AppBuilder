@@ -8,19 +8,19 @@ using System.Reflection;
 namespace CK.Setup;
 
 /// <summary>
-/// Applies the restrictions of the configuration (see <see cref="AppBuilderConfiguration.ApplyLocks"/>) once the
+/// Applies the restrictions of the configuration (see <see cref="AppContextConfiguration.ApplyLocks"/>) once the
 /// contributors have contributed: the <c>"$LOCK"</c> of the "ckonf.json" and the <see cref="ConfigurationLockAttribute"/>
 /// of the configurable types of each App, in the sections of the type (its configurable name, unless a contributor
 /// resolves them: <see cref="IAppBuilderContributor.ResolveSections"/>). Then checks the secrets
-/// (<see cref="AppBuilderConfiguration.CheckSecrets"/>) with the <see cref="ConfigurationSecretAttribute"/> of the same
+/// (<see cref="AppContextConfiguration.CheckSecrets"/>) with the <see cref="ConfigurationSecretAttribute"/> of the same
 /// types, and the values per deployment of the deployments of the solution (<see cref="CentralDeployment.CheckPerDeployment"/>)
 /// with their <see cref="ConfigurationPerDeploymentAttribute"/>. The build of a deployment writes the manifests of its
-/// hosts instead (<see cref="AppBuilderConfiguration.WriteDeploymentManifests"/>).
+/// hosts instead (<see cref="AppContextConfiguration.WriteDeploymentManifests"/>).
 /// </summary>
 static class AppBuilderLocks
 {
     public static bool Run( IActivityMonitor monitor,
-                            AppBuilderConfiguration configuration,
+                            AppContextConfiguration configuration,
                             BinPathTypeGroup.Result sets,
                             IReadOnlyList<IAppBuilderContributor> contributors,
                             CentralConfiguration? central = null,
@@ -90,7 +90,7 @@ static class AppBuilderLocks
         var appKeys = new Dictionary<string, IReadOnlyList<(string Pattern, string Source)>>( StringComparer.OrdinalIgnoreCase );
         foreach( var a in configuration.Apps )
         {
-            ok &= AppBuilderConfiguration.CollectPerDeploymentKeys( monitor, a, perDeploymentByApp.GetValueOrDefault( a ) ?? [], contributors, out var keys );
+            ok &= AppContextConfiguration.CollectPerDeploymentKeys( monitor, a, perDeploymentByApp.GetValueOrDefault( a ) ?? [], contributors, out var keys );
             appKeys[a.Name] = keys;
         }
         if( !ok ) return false;
@@ -101,7 +101,7 @@ static class AppBuilderLocks
         {
             foreach( var d in deployments )
             {
-                ok &= d.CheckPerDeployment( monitor, central, builderFolder, appKeys );
+                ok &= d.CheckPerDeployment( monitor, central, central.FindAppContextOfBuilder( builderFolder )?.Name ?? "", appKeys );
             }
         }
         return ok;

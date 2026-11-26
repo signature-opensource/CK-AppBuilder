@@ -9,4 +9,4 @@ its model (`AppConfiguration`, the central configuration, the contributor contra
 | Project | What it is |
 |---|---|
 | [CK.AppBuilder](CK.AppBuilder/README.md) | The runner of a `.Builder` project: reads its `ckonf.json`, creates and applies the aspects, runs the contributors (ordered by their requirements) and the engine. |
-| [CK.AppDeployment](CK.AppDeployment/README.md) | Builds the deployments of a solution (the `#` folders of its `Deployment` folder): one builder and its hosts per deployment. |
+| [CK.AppDeployment](CK.AppDeployment/README.md) | Builds the deployments of a solution (the `#` folders of its `Deployment` folder): one Builder and its hosts per AppContext of a deployment. |

@@ -24,13 +24,14 @@ namespace CK.Setup;
 ///     </item>
 ///     <item>The application to setup is a project named "XXX.Host".</item>
 /// </list>
-/// If a <c>ckonf.json</c> exists in the "XXX.Builder" project, it is the configuration of the builder: its App (or Apps:
-/// "X" is the "X.App" and "X.Host" projects) with the configuration of their hosts (their "appsettings.json" are
-/// projections of it), the aspects, and what the <see cref="IAppBuilderContributor"/> of the referenced engines deduce
-/// from them. An optional <c>CKSetup.xml</c> brings the aspects that are not deduced yet.
+/// If a <c>ckonf.json</c> exists in the "XXX.Builder" project, it is the configuration of the AppContext that the Builder
+/// manages: its App (or Apps: "$X" is the "X.App" and "X.Host" projects) with the configuration of their hosts (their
+/// "appsettings.json" are projections of it), the aspects, and what the <see cref="IAppBuilderContributor"/> of the
+/// referenced engines deduce from them. An optional <c>CKSetup.xml</c> brings the aspects that are not deduced yet.
 /// <para>
 /// When the repository has a central configuration (a <c>ckonf.json</c> at its root: <see cref="CentralConfiguration"/>),
-/// the <c>ckonf.json</c> of the builder is first written from it: the builder must be one of its "Builders".
+/// the <c>ckonf.json</c> of the Builder is first written from it: the Builder "{RootPath}/{Name}.Builder" manages the
+/// AppContext "Name" of its "AppContexts".
 /// </para>
 /// <para>
 /// Otherwise, if a <c>CKSetup.xml</c> exists in the "XXX.Builder" project, it automatically configures the <see cref="ICKomposableAppBuilder.EngineConfiguration"/>.
@@ -160,7 +161,7 @@ public sealed class CKomposableAppBuilder : ICKomposableAppBuilder
             if( applicationName.EndsWith( ".Builder" ) ) applicationName = applicationName.Substring( 0, applicationName.Length - 8 );
 
             EngineConfiguration? configuration;
-            AppBuilderConfiguration? app = null;
+            AppContextConfiguration? app = null;
             BinPathTypeGroup.Result? appSets = null;
             IReadOnlyList<IAppBuilderContributor>? contributors = null;
             IReadOnlyList<CentralDeployment> deployments = [];
@@ -168,11 +169,11 @@ public sealed class CKomposableAppBuilder : ICKomposableAppBuilder
             // The central configuration of the repository, if any, is the source of the builder's "ckonf.json".
             if( !CentralConfiguration.TryLoad( monitor, builderFolder, out var central ) ) return 1;
             // A builder generated for a deployment (CK.AppDeployment) projects the deployment, not the central configuration.
-            if( !CentralDeployment.TryReadBuilderFile( monitor, builderFolder, out var deploymentName, out var deployedBuilder ) ) return 1;
+            if( !CentralDeployment.TryReadBuilderFile( monitor, builderFolder, out var deploymentName, out var deployedAppContext ) ) return 1;
             CentralDeployment? deployment = null;
             if( deploymentName != null )
             {
-                Throw.DebugAssert( deployedBuilder != null );
+                Throw.DebugAssert( deployedAppContext != null );
                 if( central == null )
                 {
                     monitor.Error( $"The builder '{builderFolder}' of the deployment '{deploymentName}' is not in a repository with a central configuration." );
@@ -186,24 +187,25 @@ public sealed class CKomposableAppBuilder : ICKomposableAppBuilder
                     monitor.Error( $"The deployment '{deploymentName}' of the builder '{builderFolder}' doesn't exist: the deployments are '{all.Select( d => d.Name ).Concatenate( "', '" )}'." );
                     return 1;
                 }
-                using( monitor.OpenInfo( $"Building '{deployedBuilder}' for the deployment '{deployment.Name}'." ) )
+                using( monitor.OpenInfo( $"Building the AppContext '{deployedAppContext}' for the deployment '{deployment.Name}'." ) )
                 {
-                    if( !deployment.WriteBuilderProjection( monitor, central, deployedBuilder, builderFolder, contributors ) ) return 1;
+                    if( !deployment.WriteBuilderProjection( monitor, central, deployedAppContext, builderFolder, contributors ) ) return 1;
                 }
                 // The values per deployment have been checked by the development build: the central projection is skipped.
                 central = null;
             }
             if( central != null )
             {
-                var centralBuilder = central.FindBuilder( builderFolder );
-                if( centralBuilder == null )
+                var appContext = central.FindAppContextOfBuilder( builderFolder );
+                if( appContext == null )
                 {
-                    var relative = builderFolder.RemovePrefix( central.RootFolder );
-                    monitor.Error( $"The builder '{builderFolder}' is not in the central configuration '{central.File}': add it to its \"Builders\" (\"{relative}\": {{ \"App\": {{ ... }} }})." );
+                    var relative = builderFolder.RemoveLastPart().RemovePrefix( central.RootFolder );
+                    var name = applicationName;
+                    monitor.Error( $"The Builder '{builderFolder}' manages no AppContext of the central configuration '{central.File}': add it to its \"AppContexts\" (\"{name}\": {{ {(relative.IsEmptyPath ? "" : $"\"RootPath\": \"{relative}\", ")}\"App\": {{ ... }} }})." );
                     return 1;
                 }
                 contributors = AppBuilderContributors.Create( monitor, AppContext.BaseDirectory );
-                if( contributors == null || !central.WriteProjection( monitor, centralBuilder, contributors ) ) return 1;
+                if( contributors == null || !central.WriteProjection( monitor, appContext, contributors ) ) return 1;
                 // The deployments: their merged configuration is written by every builder run (checked below).
                 if( !CentralDeployment.TryLoad( monitor, central, out deployments ) ) return 1;
                 foreach( var d in deployments )
@@ -211,11 +213,11 @@ public sealed class CKomposableAppBuilder : ICKomposableAppBuilder
                     if( !d.WriteMergedFile( monitor, central ) ) return 1;
                 }
             }
-            if( File.Exists( builderFolder.AppendPart( AppBuilderConfiguration.FileName ) ) )
+            if( File.Exists( builderFolder.AppendPart( AppContextConfiguration.FileName ) ) )
             {
                 // The builder's configuration is the source: the Apps, their hosts' "appsettings.json" and the aspects.
                 // An optional "CKSetup.xml" brings the aspects that are not deduced yet.
-                app = AppBuilderConfiguration.Load( monitor,
+                app = AppContextConfiguration.Load( monitor,
                                                     builderFolder,
                                                     msBuildOutputPath,
                                                     File.Exists( ckSetupFile ) ? System.Xml.Linq.XElement.Load( ckSetupFile ) : null,
@@ -232,7 +234,7 @@ public sealed class CKomposableAppBuilder : ICKomposableAppBuilder
                 if( deployment == null && !app.TryLoadDevSecrets( monitor, out devSecrets ) ) return 1;
                 var context = new AppBuilderContext( configuration, app.Apps, app.Aspects, devSecrets, deployment );
                 // An aspect key that names no aspect of the Apps is an error before the contributors run.
-                if( !AppBuilderAspects.Run( monitor, context, appSets )
+                if( !AppContextAspects.Run( monitor, context, appSets )
                     || !app.CheckAspectsHandled( monitor )
                     || (contributors ??= AppBuilderContributors.Create( monitor, AppContext.BaseDirectory )) == null
                     || !AppBuilderContributors.Run( monitor, context, contributors )

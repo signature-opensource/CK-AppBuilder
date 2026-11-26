@@ -84,7 +84,7 @@ public sealed class ModeledAppAspect : IAppAspectApply
 }
 
 [TestFixture]
-public class AppBuilderAspectOptionsTests
+public class AppContextAspectOptionsTests
 {
     static AppBuilderContext? Run( string aspects )
     {
@@ -96,7 +96,7 @@ public class AppBuilderAspectOptionsTests
         var context = new AppBuilderContext( engine, [new AppConfiguration( "Sample", TestHelper.TestProjectFolder, TestHelper.TestProjectFolder, section, engine.FirstBinPath )] );
         TestAppAspect.Last = null;
         ModeledAppAspect.Last = null;
-        return AppBuilderAspects.Run( TestHelper.Monitor, context, sets ) ? context : null;
+        return AppContextAspects.Run( TestHelper.Monitor, context, sets ) ? context : null;
     }
 
     [Test]

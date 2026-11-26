@@ -1,22 +1,24 @@
 # CK.AppBuilder
 
-Runs the CKomposable engine from a "XXX.Builder" project, whose `Program.cs` is one line:
+Runs the CKomposable engine from a Builder: the "{Name}.Builder" project that manages the AppContext "Name" (its Apps
+and the aspects that apply to all of them), whose `Program.cs` is one line:
 
 ```csharp
 return await CK.Setup.CKomposableAppBuilder.RunAsync();
 ```
 
-The builder reads its `ckonf.json` (its Apps and their aspects), computes the type sets of its Apps, applies the
+The Builder reads its `ckonf.json` (the Apps of its AppContext and their aspects), computes the type sets of its Apps, applies the
 aspects found in them, runs the contributors of the engines it references, then the engine (that reuses the analysis
 of the assemblies), and writes the `appsettings.json` of the hosts: the `ckonf.json`, its projections and the
 contributors' contract are described in [the App builder model](https://github.com/signature-opensource/CK-ResourceSpace/blob/stable/CK.Engine.Configuration/AppBuilder/README.md)
-(CK.Engine.Configuration). Without `ckonf.json`, the `CKSetup.xml` of the builder configures the engine.
+(CK.Engine.Configuration). Without `ckonf.json`, the `CKSetup.xml` of the Builder configures the engine.
 
-When the repository has a central configuration (a `ckonf.json` at its git root), the builder first writes its own
-`ckonf.json` from its entry in it (with the contributors' `IAppBuilderContributor.ProjectFromCentral`): a builder that is
-not in its `"Builders"` is an error.
+When the repository has a central configuration (a `ckonf.json` at its git root), the Builder first writes its own
+`ckonf.json` from its AppContext in it (with the contributors' `IAppBuilderContributor.ProjectFromCentral`): a Builder
+whose AppContext is not in its `"AppContexts"` (the Builder "{RootPath}/{Name}.Builder" manages the AppContext "Name")
+is an error.
 
-A builder generated for a deployment (by [CK.AppDeployment](../CK.AppDeployment/README.md): its folder has a
+A Builder generated for a deployment (by [CK.AppDeployment](../CK.AppDeployment/README.md): its folder has a
 `ckonf.deployment.json`) writes its `ckonf.json` from the merged configuration of the deployment instead, never reads a
 secret (`AppBuilderContext.Deployment` is set), and writes the `Deployment.json` manifest of each of its hosts.
 

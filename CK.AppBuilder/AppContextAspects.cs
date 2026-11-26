@@ -10,13 +10,13 @@ using System.Reflection;
 namespace CK.Setup;
 
 /// <summary>
-/// Finds the aspects (<see cref="AppBuilderAspectAttribute"/>, <see cref="AppAspectAttribute"/>) in the type sets of the
+/// Finds the aspects (<see cref="AppContextAspectAttribute"/>, <see cref="AppAspectAttribute"/>) in the type sets of the
 /// Apps, creates them from their section of "ckonf.json" (with their options: <see cref="AppAspectOptionAttribute"/>,
-/// <see cref="AppBuilderAspectOptionAttribute"/>) and applies them, before the contributors run.
+/// <see cref="AppContextAspectOptionAttribute"/>) and applies them, before the contributors run.
 /// </summary>
-static class AppBuilderAspects
+static class AppContextAspects
 {
-    const string _optionAttributeHint = "[AppAspectOption] for the options of an App aspect, [AppBuilderAspectOption] for the options of a Builder aspect";
+    const string _optionAttributeHint = "[AppAspectOption] for the options of an App aspect, [AppContextAspectOption] for the options of an AppContext aspect";
 
     // An ordered option of an aspect, as the selection sees it.
     sealed record AspectOption( OrderedConfigurableOption Ordered ) : IConfigurationOption
@@ -32,7 +32,7 @@ static class AppBuilderAspects
         using var _ = monitor.OpenInfo( "Applying the aspects." );
         var builderAspects = new Dictionary<string, (ICachedType Type, IConfigurableTypeAttribute Attribute, List<AppConfiguration> Apps)>( StringComparer.OrdinalIgnoreCase );
         var appAspects = new Dictionary<AppConfiguration, Dictionary<string, (ICachedType Type, IConfigurableTypeAttribute Attribute)>>();
-        // The options of the aspects: the Builder aspects take the options of all the groups, an App aspect the ones of its group.
+        // The options of the aspects: the AppContext aspects take the options of all the groups, an App aspect the ones of its group.
         var allOptions = new List<ConfigurableOptionModel>();
         var appOptions = new Dictionary<AppConfiguration, List<ConfigurableOptionModel>>();
         bool success = true;
@@ -40,7 +40,7 @@ static class AppBuilderAspects
         {
             if( g.IsUnifiedPure ) continue;
             var apps = context.Apps.Where( a => g.Configurations.Contains( a.BinPathConfiguration ) ).ToList();
-            if( !ConfigurableOptions.TryCollect( monitor, g.ConfigurableTypes, [typeof( IAppAspect ), typeof( IAppBuilderAspect )], _optionAttributeHint, out var options ) )
+            if( !ConfigurableOptions.TryCollect( monitor, g.ConfigurableTypes, [typeof( IAppAspect ), typeof( IAppContextAspect )], _optionAttributeHint, out var options ) )
             {
                 success = false;
             }
@@ -49,7 +49,7 @@ static class AppBuilderAspects
             foreach( var t in g.ConfigurableTypes )
             {
                 if( !t.TryGetConfigurableType( monitor, out var attr ) || attr == null || attr is IConfigurableOptionAttribute ) continue;
-                if( attr is AppBuilderAspectAttribute )
+                if( attr is AppContextAspectAttribute )
                 {
                     if( !builderAspects.TryGetValue( attr.Name, out var known ) )
                     {
@@ -57,7 +57,7 @@ static class AppBuilderAspects
                     }
                     else if( known.Type != t )
                     {
-                        monitor.Error( $"The Builder aspect name '{attr.Name}' is declared by '{known.Type.CSharpName}' and '{t.CSharpName}': a name is unique." );
+                        monitor.Error( $"The AppContext aspect name '{attr.Name}' is declared by '{known.Type.CSharpName}' and '{t.CSharpName}': a name is unique." );
                         success = false;
                     }
                     else
@@ -83,13 +83,13 @@ static class AppBuilderAspects
         if( !success ) return false;
         foreach( var (name, (type, attr, apps)) in builderAspects.OrderBy( kv => kv.Key, StringComparer.OrdinalIgnoreCase ) )
         {
-            if( !TryCreate<IAppBuilderAspectApply>( monitor, context, sets.TypeCache, "Builder aspect", name, type, attr, context.Aspects, allOptions, t => FindMissingAspect( t, null ), out var aspect ) )
+            if( !TryCreate<IAppContextAspectApply>( monitor, context, sets.TypeCache, "AppContext aspect", name, type, attr, context.Aspects, allOptions, t => FindMissingAspect( t, null ), out var aspect ) )
             {
                 success = false;
                 continue;
             }
             if( aspect == null ) continue;
-            using( monitor.OpenTrace( $"Builder aspect '{name}' ('{type.CSharpName}') for {apps.Select( a => a.ToString() ).Concatenate()}." ) )
+            using( monitor.OpenTrace( $"AppContext aspect '{name}' ('{type.CSharpName}') for {apps.Select( a => a.ToString() ).Concatenate()}." ) )
             {
                 success &= Call( monitor, name, () => aspect.Apply( monitor, context, apps ) );
             }
@@ -112,13 +112,13 @@ static class AppBuilderAspects
         }
         return success;
 
-        // An option of an aspect can require an aspect (its level or above: a Builder aspect, an App aspect of its App):
+        // An option of an aspect can require an aspect (its level or above: an AppContext aspect, an App aspect of its App):
         // "only with it", the required aspect must be present. Names the missing one, null when it is present.
         string? FindMissingAspect( Type required, AppConfiguration? app )
         {
             foreach( var (name, (type, attr, _)) in builderAspects )
             {
-                if( required.IsAssignableFrom( type.Type ) ) return IsPresent( context.Aspects, attr ) ? null : $"the Builder aspect '{name}'";
+                if( required.IsAssignableFrom( type.Type ) ) return IsPresent( context.Aspects, attr ) ? null : $"the AppContext aspect '{name}'";
             }
             if( app != null && appAspects.TryGetValue( app, out var forApp ) )
             {

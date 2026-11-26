@@ -20,7 +20,7 @@ namespace CK.Setup;
 /// </code>
 /// CKli runs it after the build of the repository, in the "Deployment" folder, with the version as the first argument
 /// (the other ones are deployment names: all the deployments without them). For each deployment and each deployed
-/// builder (<see cref="CentralDeploymentSettings.Builders"/>), it generates in "Deployment/.build/{AssetName}" (ignored by
+/// AppContext (<see cref="CentralDeploymentSettings.AppContexts"/>), it generates in "Deployment/.build/{AssetName}" (ignored by
 /// git) a copy of the builder and of the hosts of its Apps (the files git tracks, the project references re-targeted: the
 /// ".App" projects are the original ones), with a <see cref="CentralDeployment.BuilderFileName"/> that makes the builder
 /// project the deployment, then publishes each host in "Deployment/Assets/{AssetName}-{App}" (CKli zips each folder of
@@ -149,60 +149,60 @@ public static partial class AppDeployment
                                         NormalizedPath assets,
                                         IReadOnlyList<string> tracked )
     {
-        var hosts = new List<(NormalizedPath Project, string Name)>();
-        foreach( var b in deployment.DeployedBuilders )
+        var hosts = new List<(NormalizedPath Project, CentralApp App)>();
+        foreach( var b in deployment.DeployedAppContexts )
         {
-            var original = central.Builders.FirstOrDefault( o => o.Path.Equals( b.Path, StringComparison.OrdinalIgnoreCase ) );
+            var original = central.FindAppContext( b.Name );
             if( original == null )
             {
-                monitor.Error( $"The builder '{b.Path}' of the deployment '{deployment.Name}' is not a builder of the solution: a deployment builds the projects of the solution." );
+                monitor.Error( $"The AppContext '{b.Name}' of the deployment '{deployment.Name}' is not an AppContext of the solution: a deployment builds the projects of the solution." );
                 return false;
             }
-            // The generated builder keeps the path of the original one ("Front/Auth3.Front.Builder"), its hosts are next to it.
-            var builderFolder = work.Combine( b.Path );
-            var builderProject = FindProject( monitor, original.Folder );
+            // The generated Builder keeps the path of the original one ("Front/Front.Builder"), its hosts are next to it.
+            var builderFolder = work.Combine( original.BuilderFolder.RemovePrefix( central.RootFolder ) );
+            var builderProject = FindProject( monitor, original.BuilderFolder );
             if( builderProject == null ) return false;
             var copies = new Dictionary<string, NormalizedPath>( StringComparer.OrdinalIgnoreCase )
             {
                 { builderProject, builderFolder.AppendPart( Path.GetFileName( builderProject ) ) }
             };
-            var appHosts = new List<(NormalizedPath Original, NormalizedPath Copy, NormalizedPath Project)>();
+            var appHosts = new List<(CentralApp App, NormalizedPath Copy, NormalizedPath Project)>();
             foreach( var a in b.Apps )
             {
                 var o = original.Apps.FirstOrDefault( x => x.Name.Equals( a.Name, StringComparison.OrdinalIgnoreCase ) );
                 if( o == null )
                 {
-                    monitor.Error( $"The {a} of the deployment '{deployment.Name}' is not an App of the builder '{b.Path}' of the solution." );
+                    monitor.Error( $"The {a} of the deployment '{deployment.Name}' is not an App of the AppContext '{b.Name}' of the solution." );
                     return false;
                 }
                 var hostProject = FindProject( monitor, o.HostProjectFolder );
                 if( hostProject == null ) return false;
-                // The convention of the generated builder: "../{Name}.Host".
-                var copy = builderFolder.RemoveLastPart().AppendPart( $"{a.Name}.Host" );
+                // Next to the generated Builder, named like the original (its projection says so).
+                var copy = builderFolder.RemoveLastPart().AppendPart( o.HostProjectFolder.LastPart );
                 var copiedProject = copy.AppendPart( Path.GetFileName( hostProject ) );
                 copies.Add( hostProject, copiedProject );
-                appHosts.Add( (o.HostProjectFolder, copy, copiedProject) );
+                appHosts.Add( (o, copy, copiedProject) );
             }
-            if( !CopyProject( monitor, central.RootFolder, original.Folder, builderFolder, tracked, copies, isHost: false ) ) return false;
-            File.Delete( builderFolder.AppendPart( AppBuilderConfiguration.FileName ) );
-            deployment.WriteBuilderFile( builderFolder, b.Path );
+            if( !CopyProject( monitor, central.RootFolder, original.BuilderFolder, builderFolder, tracked, copies, isHost: false ) ) return false;
+            File.Delete( builderFolder.AppendPart( AppContextConfiguration.FileName ) );
+            deployment.WriteBuilderFile( builderFolder, b.Name );
             foreach( var (o, copy, project) in appHosts )
             {
-                if( !CopyProject( monitor, central.RootFolder, o, copy, tracked, copies, isHost: true ) ) return false;
-                var appName = copy.LastPart[..^5];
-                WritePublishProperties( project, deployment, appName );
-                // The App name: an asset is a host, ".Host" says nothing.
-                hosts.Add( (project, appName) );
+                if( !CopyProject( monitor, central.RootFolder, o.HostProjectFolder, copy, tracked, copies, isHost: true ) ) return false;
+                WritePublishProperties( project, deployment, o.Name );
+                hosts.Add( (project, o) );
             }
         }
         if( hosts.Count == 0 )
         {
-            monitor.Warn( $"The deployment '{deployment.Name}' deploys no builder." );
+            monitor.Warn( $"The deployment '{deployment.Name}' deploys no AppContext." );
             return true;
         }
-        foreach( var (project, name) in hosts )
+        foreach( var (project, app) in hosts )
         {
-            var output = assets.Combine( deployment.GetAssetFolder( name ) );
+            // The asset is named after the projects of the App: an asset is a host, ".Host" says nothing.
+            var name = app.ProjectName;
+            var output = assets.Combine( deployment.GetAssetFolder( app ) );
             using( monitor.OpenInfo( $"Publishing '{name}' in '{output}'." ) )
             {
                 var arguments = new List<string> { "publish", project, "-c", "Release", "-o", output, $"-p:Version={version}",
@@ -221,7 +221,7 @@ public static partial class AppDeployment
                     return false;
                 }
                 // The manifest written by the builder, with the version, in the file of the published host.
-                var manifest = project.RemoveLastPart().Combine( AppBuilderConfiguration.DeploymentManifestFileName );
+                var manifest = project.RemoveLastPart().Combine( AppContextConfiguration.DeploymentManifestFileName );
                 var published = output.AppendPart( PublishedFileName );
                 if( !File.Exists( manifest ) || !File.Exists( published ) )
                 {
