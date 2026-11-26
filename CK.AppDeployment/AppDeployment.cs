@@ -374,8 +374,9 @@ public static partial class AppDeployment
         }
         var nl = Environment.NewLine;
         var text = new System.Text.StringBuilder();
-        text.Append( "<!-- Written by CK.AppDeployment: the " ).Append( System.Security.SecurityElement.Escape( app.ToString() ) )
-            .Append( " and the packages that the deployment '" ).Append( System.Security.SecurityElement.Escape( deployment.Name ) ).Append( "' adds to it. -->" ).Append( nl )
+        // An XML comment only forbids "--": the names are written as they are.
+        text.Append( "<!-- Written by CK.AppDeployment: the " ).Append( app.ToString().Replace( "--", "- -" ) )
+            .Append( " and the packages that the deployment '" ).Append( deployment.Name.Replace( "--", "- -" ) ).Append( "' adds to it. -->" ).Append( nl )
             .Append( "<Project Sdk=\"Microsoft.NET.Sdk\">" ).Append( nl )
             .Append( "  <PropertyGroup>" ).Append( nl )
             .Append( "    <TargetFramework>" ).Append( targetFramework.Groups[1].Value.Trim() ).Append( "</TargetFramework>" ).Append( nl )

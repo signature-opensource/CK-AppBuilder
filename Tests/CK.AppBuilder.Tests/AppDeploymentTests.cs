@@ -109,6 +109,7 @@ public class AppDeploymentTests
                           "Named like the original folder: the BinPath of the App keeps its name." );
         Directory.GetFiles( folder ).Select( Path.GetFileName ).ShouldBe( ["Sample.Front.App.Deployment.csproj"] );
         var text = File.ReadAllText( project );
+        text.ShouldStartWith( "<!-- Written by CK.AppDeployment: the App '$Front' and the packages that the deployment '#Production' adds to it. -->" );
         text.ShouldContain( "<TargetFramework>net10.0</TargetFramework>" );
         text.ShouldContain( "<CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>" );
         text.ShouldContain( $"""<ProjectReference Include="{Path.Combine( "..", "..", "..", "..", "..", "Front", "Sample.Front.App", "Sample.Front.App.csproj" )}" />""" );
