@@ -233,6 +233,13 @@ public sealed class CKomposableAppBuilder : ICKomposableAppBuilder
                 IReadOnlyDictionary<string, string>? devSecrets = null;
                 if( deployment == null && !app.TryLoadDevSecrets( monitor, out devSecrets ) ) return 1;
                 var context = new AppBuilderContext( configuration, app.Apps, app.Aspects, devSecrets, deployment );
+                // The configurable types of each App: the contributors find the type of a section (and its models) by its name.
+                foreach( var g in appSets.Groups )
+                {
+                    if( g.IsUnifiedPure ) continue;
+                    var types = g.ConfigurableTypes.Select( t => t.Type ).ToArray();
+                    foreach( var a in app.Apps.Where( a => g.Configurations.Contains( a.BinPathConfiguration ) ) ) a.ConfigurableTypes = types;
+                }
                 // An aspect key that names no aspect of the Apps is an error before the contributors run.
                 if( !AppContextAspects.Run( monitor, context, appSets )
                     || !app.CheckAspectsHandled( monitor )
