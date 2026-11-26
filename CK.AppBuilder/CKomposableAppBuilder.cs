@@ -196,8 +196,8 @@ public sealed class CKomposableAppBuilder : ICKomposableAppBuilder
             }
             if( central != null )
             {
-                var appContext = central.FindAppContextOfBuilder( builderFolder );
-                if( appContext == null )
+                var centralAppContext = central.FindAppContextOfBuilder( builderFolder );
+                if( centralAppContext == null )
                 {
                     var relative = builderFolder.RemoveLastPart().RemovePrefix( central.RootFolder );
                     var name = applicationName;
@@ -205,7 +205,7 @@ public sealed class CKomposableAppBuilder : ICKomposableAppBuilder
                     return 1;
                 }
                 contributors = AppBuilderContributors.Create( monitor, AppContext.BaseDirectory );
-                if( contributors == null || !central.WriteProjection( monitor, appContext, contributors ) ) return 1;
+                if( contributors == null || !central.WriteProjection( monitor, centralAppContext, contributors ) ) return 1;
                 // The deployments: their merged configuration is written by every builder run (checked below).
                 if( !CentralDeployment.TryLoad( monitor, central, out deployments ) ) return 1;
                 foreach( var d in deployments )
