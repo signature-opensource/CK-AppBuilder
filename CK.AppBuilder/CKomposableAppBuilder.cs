@@ -238,7 +238,7 @@ public sealed class CKomposableAppBuilder : ICKomposableAppBuilder
                 {
                     if( g.IsUnifiedPure ) continue;
                     var types = g.ConfigurableTypes.Select( t => t.Type ).ToArray();
-                    foreach( var a in app.Apps.Where( x => g.Configurations.Contains( x.BinPathConfiguration ) ) ) a.ConfigurableTypes = types;
+                    foreach( var appConfiguration in app.Apps.Where( x => g.Configurations.Contains( x.BinPathConfiguration ) ) ) appConfiguration.ConfigurableTypes = types;
                 }
                 // An aspect key that names no aspect of the Apps is an error before the contributors run.
                 if( !AppContextAspects.Run( monitor, context, appSets )
