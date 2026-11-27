@@ -85,13 +85,13 @@ static class AppContextAspects
         var architecture = new Dictionary<AppConfiguration, System.Text.StringBuilder>();
         foreach( var (name, (type, attr, apps)) in builderAspects.OrderBy( kv => kv.Key, StringComparer.OrdinalIgnoreCase ) )
         {
-            if( !TryCreate<IAppContextAspectApply>( monitor, context, sets.TypeCache, "AppContext aspect", name, type, attr, context.Aspects, allOptions, t => FindMissingAspect( t, null ), out var aspect, out var description ) )
+            if( !TryCreate<IAppContextAspectApply>( monitor, context, sets.TypeCache, "AppContext aspect", name, type, attr, context.Aspects, allOptions, t => FindMissingAspect( t, null ), out var aspect, out var architectureSection ) )
             {
                 success = false;
                 continue;
             }
             if( aspect == null ) continue;
-            foreach( var a in apps ) Describe( architecture, a, description );
+            foreach( var a in apps ) Describe( architecture, a, architectureSection );
             using( monitor.OpenTrace( $"AppContext aspect '{name}' ('{type.CSharpName}') for {apps.Select( a => a.ToString() ).Concatenate()}." ) )
             {
                 success &= Call( monitor, name, () => aspect.Apply( monitor, context, apps ) );
@@ -101,13 +101,13 @@ static class AppContextAspects
         {
             foreach( var (name, (type, attr)) in aspects.OrderBy( kv => kv.Key, StringComparer.OrdinalIgnoreCase ) )
             {
-                if( !TryCreate<IAppAspectApply>( monitor, context, sets.TypeCache, $"App aspect of {app}", name, type, attr, app.Aspects, appOptions.GetValueOrDefault( app ) ?? [], t => FindMissingAspect( t, app ), out var aspect, out var description ) )
+                if( !TryCreate<IAppAspectApply>( monitor, context, sets.TypeCache, $"App aspect of {app}", name, type, attr, app.Aspects, appOptions.GetValueOrDefault( app ) ?? [], t => FindMissingAspect( t, app ), out var aspect, out var architectureSection ) )
                 {
                     success = false;
                     continue;
                 }
                 if( aspect == null ) continue;
-                Describe( architecture, app, description );
+                Describe( architecture, app, architectureSection );
                 using( monitor.OpenTrace( $"App aspect '{name}' ('{type.CSharpName}') of {app}." ) )
                 {
                     success &= Call( monitor, name, () => aspect.Apply( monitor, context, app ) );
@@ -166,10 +166,10 @@ static class AppContextAspects
                               IReadOnlyList<ConfigurableOptionModel> options,
                               Func<Type, string?> findMissingAspect,
                               out T? aspect,
-                              out string? description ) where T : class
+                              out string? architectureSection ) where T : class
     {
         aspect = null;
-        description = null;
+        architectureSection = null;
         var section = aspects.TryGetAspect( name );
         if( section != null && section.Value != null && bool.TryParse( section.Value, out var on ) && !on )
         {
@@ -297,7 +297,7 @@ static class AppContextAspects
                 d.Append( '\n' );
                 ConfigurationModelMarkdown.AppendTable( d, modelDescription, model, aspectSection?.GetChildren().Select( c => c.Key ) ?? [] );
             }
-            description = d.ToString();
+            architectureSection = d.ToString();
             return true;
         }
         catch( TargetInvocationException ex ) when( ex.InnerException != null )
