@@ -74,6 +74,16 @@ return await CK.Setup.AppDeployment.RunAsync( args );
   BinPath of the App has both, and the host references it. Its own assembly has no code: the engine ignores it.
 - **What a package does is its own business:** its types and its aspects (the Builder applies them), its MSBuild files
   (`buildTransitive`: they reach the host through the wrapper). CK.AppDeployment only adds it.
+- **The engines it requires are added to the generated Builder:** the generated Builder is restored, the
+  `[RequiredEngine]` of the assemblies of its closure are read from their metadata (nothing is loaded), and an engine
+  that the closure doesn't have becomes a `PackageReference` of the generated Builder (never of the host). Its version is
+  its own `//ck-package` line (a Model and its Engine may be in different repositories): a required engine without its
+  line is an error that names the line to add.
+
+  ```csharp
+  //ck-package CK.Ng.AppHost.DesktopNgApp@x.y.z
+  //ck-package CK.AppHost.DesktopNgApp.Engine@x.y.z
+  ```
 - **The App must discover its folder:** an App whose type set is restricted (`"Assemblies"` or `"Types"`) would ignore
   the added packages, so it is an error.
 

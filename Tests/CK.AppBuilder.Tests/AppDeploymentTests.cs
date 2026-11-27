@@ -116,6 +116,75 @@ public class AppDeploymentTests
         text.ShouldContain( """<PackageReference Include="Some.Extension" Version="1.2.3" />""" );
     }
 
+    // An "obj/project.assets.json" whose package "CK.StObj.Model" ([assembly: RequiredEngine( "CK.StObj.Runtime" )]) is the
+    // assembly of the test's output, with or without the engine in the closure.
+    static NormalizedPath WriteAssets( bool withEngine )
+    {
+        var output = AppContext.BaseDirectory.Replace( '\\', '/' );
+        var engine = withEngine ? """, "CK.StObj.Runtime/1.0.0": { "type": "package" }""" : "";
+        var engineLibrary = withEngine ? """, "CK.StObj.Runtime/1.0.0": { "type": "package", "path": "none" }""" : "";
+        var assets = NewFolder().AppendPart( "project.assets.json" );
+        File.WriteAllText( assets, $$"""
+            {
+              "version": 3,
+              "targets": {
+                "net10.0": {
+                  "CK.StObj.Model/1.0.0": { "type": "package", "runtime": { "CK.StObj.Model.dll": {} } },
+                  "Some.App/1.0.0": { "type": "project" }{{engine}}
+                },
+                "net10.0/win-x64": {}
+              },
+              "libraries": {
+                "CK.StObj.Model/1.0.0": { "type": "package", "path": "." },
+                "Some.App/1.0.0": { "type": "project", "path": "../Some.App/Some.App.csproj" }{{engineLibrary}}
+              },
+              "packageFolders": { "{{output}}": {} }
+            }
+            """ );
+        return assets;
+    }
+
+    [Test]
+    public void the_engines_that_the_closure_requires_and_doesnt_have_are_found()
+    {
+        var missing = AppDeployment.FindMissingEngines( TestHelper.Monitor, WriteAssets( withEngine: false ) ).ShouldNotBeNull();
+        missing.Keys.ShouldBe( ["CK.StObj.Runtime"] );
+        missing["CK.StObj.Runtime"].ShouldBe( ["CK.StObj.Model"] );
+
+        AppDeployment.FindMissingEngines( TestHelper.Monitor, WriteAssets( withEngine: true ) ).ShouldNotBeNull()
+                     .ShouldBeEmpty( "The engine is in the closure." );
+    }
+
+    [Test]
+    public void the_missing_engines_are_added_to_the_generated_Builder_at_the_version_of_their_ck_package_line()
+    {
+        var (_, production) = CreateSolution( """{ "Deployment": { "Apps": { "$Front": { "Packages": [ "Some.Extension" ] } } } }""" );
+        var builder = NewFolder().AppendPart( "Front.Builder.csproj" );
+        File.WriteAllText( builder, """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <ItemGroup>
+                <PackageReference Include="CK.AppBuilder" Version="1.0.0" />
+              </ItemGroup>
+            </Project>
+            """ );
+        var missing = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.IReadOnlyList<string>>
+        {
+            ["Some.Engine"] = ["Some.Model"]
+        };
+        using( TestHelper.Monitor.CollectTexts( out var texts ) )
+        {
+            AppDeployment.AddEngineReferences( TestHelper.Monitor, production, builder, missing, new System.Collections.Generic.Dictionary<string, string>() )
+                         .ShouldBeFalse();
+            texts.ShouldContain( t => t.Contains( "needs the engine 'Some.Engine' (required by 'Some.Model'), but the script 'GenerateAssets.cs' has no '//ck-package Some.Engine@<version>' line" ) );
+        }
+        AppDeployment.AddEngineReferences( TestHelper.Monitor, production, builder, missing, new System.Collections.Generic.Dictionary<string, string> { ["Some.Engine"] = "2.0.0" } )
+                     .ShouldBeTrue();
+        var text = File.ReadAllText( builder );
+        text.ShouldContain( """<PackageReference Include="Some.Engine" Version="2.0.0" />""" );
+        text.ShouldContain( "The engines that the packages of the deployment '#Production' require" );
+        text.TrimEnd().ShouldEndWith( "</Project>" );
+    }
+
     [TestCase( "{}", "1.2.3", "has no '//ck-package Some.Extension@<version>' line" )]
     [TestCase( """{ "Types": [ "A.B, C" ] }""", "1.2.3", "the App has \"Types\"" )]
     [TestCase( """{ "Assemblies": [ "C" ] }""", "1.2.3", "the App has \"Assemblies\"" )]

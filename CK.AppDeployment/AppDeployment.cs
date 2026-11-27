@@ -200,6 +200,19 @@ public static partial class AppDeployment
             if( !CopyProject( monitor, central.RootFolder, original.BuilderFolder, builderFolder, tracked, copies, isHost: false ) ) return false;
             File.Delete( builderFolder.AppendPart( AppContextConfiguration.FileName ) );
             deployment.WriteBuilderFile( builderFolder, b.Name );
+            // The added packages may require engines that the Builder doesn't reference: the restored closure of the
+            // generated Builder (it references the wrappers) tells.
+            if( copies.Count > appHosts.Count + 1 )
+            {
+                var generatedBuilder = copies[builderProject.Value];
+                if( await RunProcessAsync( monitor, "dotnet", ["restore", generatedBuilder], builderFolder ).ConfigureAwait( false ) != 0 )
+                {
+                    monitor.Error( $"The restore of the generated Builder '{generatedBuilder}' failed." );
+                    return false;
+                }
+                var missing = FindMissingEngines( monitor, builderFolder.Combine( "obj/project.assets.json" ) );
+                if( missing == null || !AddEngineReferences( monitor, deployment, generatedBuilder, missing, packageVersions ) ) return false;
+            }
             foreach( var (o, copy, project) in appHosts )
             {
                 if( !CopyProject( monitor, central.RootFolder, o.HostProjectFolder, copy, tracked, copies, isHost: true ) ) return false;
@@ -276,7 +289,8 @@ public static partial class AppDeployment
 
     /// <summary>
     /// The file-based app that CKli runs in the "Deployment" folder and that calls <see cref="RunAsync(string[])"/>: its
-    /// <c>//ck-package Name@Version</c> lines give the versions of the packages that the deployments add to their Apps.
+    /// <c>//ck-package Name@Version</c> lines give the versions of the packages that the deployments add to their Apps,
+    /// and of the engines that they require and that the Builder doesn't reference.
     /// </summary>
     public const string ScriptFileName = "GenerateAssets.cs";
 
@@ -397,6 +411,134 @@ public static partial class AppDeployment
 
     [GeneratedRegex( "<TargetFramework>([^<]+)</TargetFramework>" )]
     private static partial Regex TargetFramework();
+
+    /// <summary>
+    /// Finds the engines that the closure of a restored project requires and doesn't have: the
+    /// <see cref="RequiredEngineAttribute"/> of the runtime assemblies of its packages (read from their metadata, nothing
+    /// is loaded), minus the libraries of the closure (an engine is a package or a project named after its assembly).
+    /// </summary>
+    /// <param name="monitor">The monitor to use.</param>
+    /// <param name="assetsFile">The "obj/project.assets.json" of the restored project.</param>
+    /// <returns>The missing engines and the assemblies that require them, or null on error.</returns>
+    internal static IReadOnlyDictionary<string, IReadOnlyList<string>>? FindMissingEngines( IActivityMonitor monitor, NormalizedPath assetsFile )
+    {
+        if( !File.Exists( assetsFile ) )
+        {
+            monitor.Error( $"No '{assetsFile}': the project is not restored." );
+            return null;
+        }
+        try
+        {
+            using var doc = JsonDocument.Parse( File.ReadAllText( assetsFile ) );
+            var root = doc.RootElement;
+            var packageFolders = root.GetProperty( "packageFolders" ).EnumerateObject().Select( p => p.Name ).ToList();
+            var libraries = root.GetProperty( "libraries" );
+            // The target of the framework (the targets with a runtime identifier are "tfm/rid").
+            var target = root.GetProperty( "targets" ).EnumerateObject().First( t => !t.Name.Contains( '/' ) ).Value;
+            var present = new HashSet<string>( StringComparer.OrdinalIgnoreCase );
+            var required = new Dictionary<string, List<string>>( StringComparer.OrdinalIgnoreCase );
+            foreach( var entry in target.EnumerateObject() )
+            {
+                present.Add( entry.Name.Substring( 0, entry.Name.IndexOf( '/' ) ) );
+                if( !entry.Value.TryGetProperty( "type", out var type ) || type.GetString() != "package" ) continue;
+                if( !entry.Value.TryGetProperty( "runtime", out var runtime ) ) continue;
+                var path = libraries.GetProperty( entry.Name ).GetProperty( "path" ).GetString()!;
+                foreach( var file in runtime.EnumerateObject().Select( f => f.Name ).Where( f => f.EndsWith( ".dll", StringComparison.OrdinalIgnoreCase ) ) )
+                {
+                    present.Add( Path.GetFileNameWithoutExtension( file ) );
+                    var dll = packageFolders.Select( f => Path.Combine( f, path, file ) ).FirstOrDefault( File.Exists );
+                    if( dll == null ) continue;
+                    foreach( var engine in ReadRequiredEngines( dll ) )
+                    {
+                        if( !required.TryGetValue( engine, out var by ) ) required.Add( engine, by = [] );
+                        by.Add( Path.GetFileNameWithoutExtension( file ) );
+                    }
+                }
+            }
+            return required.Where( kv => !present.Contains( kv.Key ) )
+                           .ToDictionary( kv => kv.Key, kv => (IReadOnlyList<string>)kv.Value, StringComparer.OrdinalIgnoreCase );
+        }
+        catch( Exception ex )
+        {
+            monitor.Error( $"Unable to read the engines required by the packages of '{assetsFile}'.", ex );
+            return null;
+        }
+    }
+
+    // The names of the [assembly: RequiredEngine( "Name" )] of an assembly, from its metadata.
+    static IEnumerable<string> ReadRequiredEngines( string dll )
+    {
+        using var pe = new System.Reflection.PortableExecutable.PEReader( File.OpenRead( dll ) );
+        if( !pe.HasMetadata ) return [];
+        var md = System.Reflection.Metadata.PEReaderExtensions.GetMetadataReader( pe );
+        if( !md.IsAssembly ) return [];
+        var result = new List<string>();
+        foreach( var h in md.GetAssemblyDefinition().GetCustomAttributes() )
+        {
+            var a = md.GetCustomAttribute( h );
+            if( a.Constructor.Kind != System.Reflection.Metadata.HandleKind.MemberReference ) continue;
+            var parent = md.GetMemberReference( (System.Reflection.Metadata.MemberReferenceHandle)a.Constructor ).Parent;
+            if( parent.Kind != System.Reflection.Metadata.HandleKind.TypeReference ) continue;
+            var t = md.GetTypeReference( (System.Reflection.Metadata.TypeReferenceHandle)parent );
+            if( !md.StringComparer.Equals( t.Name, nameof( RequiredEngineAttribute ) ) || !md.StringComparer.Equals( t.Namespace, "CK.Setup" ) ) continue;
+            var blob = md.GetBlobReader( a.Value );
+            if( blob.ReadUInt16() != 1 ) continue;
+            var name = blob.ReadSerializedString();
+            if( !string.IsNullOrWhiteSpace( name ) ) result.Add( name );
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Adds to a generated Builder the engines that the packages of the deployment require and that its closure doesn't
+    /// have (see <see cref="FindMissingEngines"/>): their versions are the <c>//ck-package</c> lines of the script (a Model
+    /// and its Engine may be in different repositories: the version of an engine is the one of the World).
+    /// </summary>
+    /// <param name="monitor">The monitor to use.</param>
+    /// <param name="deployment">The deployment.</param>
+    /// <param name="builderProject">The generated Builder project.</param>
+    /// <param name="missing">The missing engines and the assemblies that require them.</param>
+    /// <param name="packageVersions">The versions of the <c>//ck-package</c> lines of the script.</param>
+    /// <returns>True on success, false on error.</returns>
+    internal static bool AddEngineReferences( IActivityMonitor monitor,
+                                              CentralDeployment deployment,
+                                              NormalizedPath builderProject,
+                                              IReadOnlyDictionary<string, IReadOnlyList<string>> missing,
+                                              IReadOnlyDictionary<string, string> packageVersions )
+    {
+        if( missing.Count == 0 ) return true;
+        bool success = true;
+        var references = new List<(string Id, string Version)>();
+        foreach( var (engine, by) in missing.OrderBy( kv => kv.Key, StringComparer.Ordinal ) )
+        {
+            if( packageVersions.TryGetValue( engine, out var v ) ) references.Add( (engine, v) );
+            else
+            {
+                monitor.Error( $"The deployment '{deployment.Name}' needs the engine '{engine}' (required by '{by.Concatenate( "', '" )}'), but the script '{ScriptFileName}' has no '//ck-package {engine}@<version>' line: the version of an engine is the one of the World (CKli upgrades the line)." );
+                success = false;
+            }
+        }
+        if( !success ) return false;
+        var text = File.ReadAllText( builderProject );
+        var end = text.LastIndexOf( "</Project>", StringComparison.Ordinal );
+        if( end < 0 )
+        {
+            monitor.Error( $"No '</Project>' in '{builderProject}'." );
+            return false;
+        }
+        var nl = Environment.NewLine;
+        var group = new System.Text.StringBuilder();
+        group.Append( "  <!-- The engines that the packages of the deployment '" ).Append( deployment.Name.Replace( "--", "- -" ) )
+             .Append( "' require (CK.AppDeployment). -->" ).Append( nl ).Append( "  <ItemGroup>" ).Append( nl );
+        foreach( var (id, version) in references )
+        {
+            group.Append( "    <PackageReference Include=\"" ).Append( id ).Append( "\" Version=\"" ).Append( version ).Append( "\" />" ).Append( nl );
+        }
+        group.Append( "  </ItemGroup>" ).Append( nl );
+        File.WriteAllText( builderProject, text.Substring( 0, end ) + group + text.Substring( end ) );
+        monitor.Info( $"Engines added to '{builderProject}': '{references.Select( r => $"{r.Id}@{r.Version}" ).Concatenate( "', '" )}'." );
+        return true;
+    }
 
     // The single ".csproj" of a project folder.
     static NormalizedPath? FindProject( IActivityMonitor monitor, NormalizedPath folder )
