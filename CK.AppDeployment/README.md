@@ -47,6 +47,10 @@ For each deployment and each AppContext that it deploys (`"Deployment": { "AppCo
    its bases, the publication properties, the names of the secrets that the host needs (given at deploy time: the
    `Secrets` section of the host's configuration), the values per deployment (its addresses, its public URLs), the
    instances of a fleet.
+4. **It publishes the `architecture.md`** that the Builder wrote for the deployed host (the App described from its
+   content, and "The deployment": the same facts as the manifest, the secrets by their names only) next to the
+   executable, ended by "The publication": the version, the build (the commit and its date), the packages that the
+   deployment adds to the App and the engines added to the generated Builder, with their versions.
 
 ## The packages that a deployment adds to an App
 

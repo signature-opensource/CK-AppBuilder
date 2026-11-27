@@ -153,6 +153,8 @@ public static partial class AppDeployment
                                         IReadOnlyDictionary<string, string> packageVersions )
     {
         var hosts = new List<(NormalizedPath Project, CentralApp App)>();
+        // The engines added to the generated Builder of each host (its AppContext's).
+        var addedEngines = new Dictionary<NormalizedPath, IReadOnlyList<(string Id, string Version)>>();
         foreach( var b in deployment.DeployedAppContexts )
         {
             var original = central.FindAppContext( b.Name );
@@ -211,7 +213,8 @@ public static partial class AppDeployment
                     return false;
                 }
                 var missing = FindMissingEngines( monitor, builderFolder.Combine( "obj/project.assets.json" ) );
-                if( missing == null || !AddEngineReferences( monitor, deployment, generatedBuilder, missing, packageVersions ) ) return false;
+                if( missing == null || !AddEngineReferences( monitor, deployment, generatedBuilder, missing, packageVersions, out var engines ) ) return false;
+                foreach( var (_, _, project) in appHosts ) addedEngines[project] = engines;
             }
             foreach( var (o, copy, project) in appHosts )
             {
@@ -260,9 +263,46 @@ public static partial class AppDeployment
                 var publishedNode = (JsonObject)JsonNode.Parse( File.ReadAllText( published ) )!;
                 publishedNode["Deployment"] = deploymentNode;
                 File.WriteAllText( published, publishedNode.ToJsonString( new JsonSerializerOptions { WriteIndented = true } ) + Environment.NewLine );
+                // The architecture written by the builder (the App, the deployment), and the publication.
+                var architecture = project.RemoveLastPart().AppendPart( AppContextConfiguration.ArchitectureFileName );
+                if( !File.Exists( architecture ) )
+                {
+                    monitor.Error( $"The publication of '{name}' has no '{architecture}': the builder of the deployment writes it." );
+                    return false;
+                }
+                var packages = deployment.Settings.GetPackages( app.Name ).Select( p => (p, packageVersions.GetValueOrDefault( p ) ?? "?") ).ToList();
+                File.WriteAllText( output.AppendPart( AppContextConfiguration.ArchitectureFileName ),
+                                   File.ReadAllText( architecture ).TrimEnd() + Environment.NewLine + Environment.NewLine
+                                   + DescribePublication( version, informationalVersion, packages, addedEngines.GetValueOrDefault( project ) ?? [] ) );
             }
         }
         return true;
+    }
+
+    /// <summary>
+    /// The "The publication" section that ends the "architecture.md" of a published host: what only the publication knows
+    /// (its version, its commit, the packages that the deployment adds and the engines that they need).
+    /// </summary>
+    /// <param name="version">The version.</param>
+    /// <param name="informationalVersion">The informational version (the version, the commit, its date).</param>
+    /// <param name="packages">The packages that the deployment adds to the App, with their versions.</param>
+    /// <param name="engines">The engines added to the generated Builder, with their versions.</param>
+    /// <returns>The section (Markdown).</returns>
+    internal static string DescribePublication( string version,
+                                                string informationalVersion,
+                                                IReadOnlyList<(string Id, string Version)> packages,
+                                                IReadOnlyList<(string Id, string Version)> engines )
+    {
+        var nl = Environment.NewLine;
+        var b = new System.Text.StringBuilder();
+        b.Append( "## The publication" ).Append( nl ).Append( nl )
+         .Append( "- Version: `" ).Append( version ).Append( '`' ).Append( nl )
+         .Append( "- Build: `" ).Append( informationalVersion ).Append( '`' ).Append( nl )
+         .Append( "- Packages added by the deployment: " ).Append( List( packages ) ).Append( nl )
+         .Append( "- Engines added to the Builder: " ).Append( List( engines ) ).Append( nl );
+        return b.ToString();
+
+        static string List( IReadOnlyList<(string Id, string Version)> l ) => l.Count == 0 ? "*(none)*" : string.Join( ", ", l.Select( p => $"`{p.Id}@{p.Version}`" ) );
     }
 
     // The publication properties of an App, in a PropertyGroup at the end of its copied host project: they apply to the
@@ -499,13 +539,16 @@ public static partial class AppDeployment
     /// <param name="builderProject">The generated Builder project.</param>
     /// <param name="missing">The missing engines and the assemblies that require them.</param>
     /// <param name="packageVersions">The versions of the <c>//ck-package</c> lines of the script.</param>
+    /// <param name="added">The engines added, with their versions.</param>
     /// <returns>True on success, false on error.</returns>
     internal static bool AddEngineReferences( IActivityMonitor monitor,
                                               CentralDeployment deployment,
                                               NormalizedPath builderProject,
                                               IReadOnlyDictionary<string, IReadOnlyList<string>> missing,
-                                              IReadOnlyDictionary<string, string> packageVersions )
+                                              IReadOnlyDictionary<string, string> packageVersions,
+                                              out IReadOnlyList<(string Id, string Version)> added )
     {
+        added = [];
         if( missing.Count == 0 ) return true;
         bool success = true;
         var references = new List<(string Id, string Version)>();
@@ -537,6 +580,7 @@ public static partial class AppDeployment
         group.Append( "  </ItemGroup>" ).Append( nl );
         File.WriteAllText( builderProject, text.Substring( 0, end ) + group + text.Substring( end ) );
         monitor.Info( $"Engines added to '{builderProject}': '{references.Select( r => $"{r.Id}@{r.Version}" ).Concatenate( "', '" )}'." );
+        added = references;
         return true;
     }
 

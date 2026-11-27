@@ -173,16 +173,34 @@ public class AppDeploymentTests
         };
         using( TestHelper.Monitor.CollectTexts( out var texts ) )
         {
-            AppDeployment.AddEngineReferences( TestHelper.Monitor, production, builder, missing, new System.Collections.Generic.Dictionary<string, string>() )
+            AppDeployment.AddEngineReferences( TestHelper.Monitor, production, builder, missing, new System.Collections.Generic.Dictionary<string, string>(), out _ )
                          .ShouldBeFalse();
             texts.ShouldContain( t => t.Contains( "needs the engine 'Some.Engine' (required by 'Some.Model'), but the script 'GenerateAssets.cs' has no '//ck-package Some.Engine@<version>' line" ) );
         }
-        AppDeployment.AddEngineReferences( TestHelper.Monitor, production, builder, missing, new System.Collections.Generic.Dictionary<string, string> { ["Some.Engine"] = "2.0.0" } )
+        AppDeployment.AddEngineReferences( TestHelper.Monitor, production, builder, missing, new System.Collections.Generic.Dictionary<string, string> { ["Some.Engine"] = "2.0.0" }, out var added )
                      .ShouldBeTrue();
+        added.ShouldBe( [("Some.Engine", "2.0.0")] );
         var text = File.ReadAllText( builder );
         text.ShouldContain( """<PackageReference Include="Some.Engine" Version="2.0.0" />""" );
         text.ShouldContain( "The engines that the packages of the deployment '#Production' require" );
         text.TrimEnd().ShouldEndWith( "</Project>" );
+    }
+
+    [Test]
+    public void the_published_architecture_ends_with_the_publication()
+    {
+        var text = AppDeployment.DescribePublication( "1.0.0", "1.0.0/abc/2026-11-27",
+                                                      [("CK.Ng.AppHost.DesktopNgApp", "0.0.1")],
+                                                      [] ).ReplaceLineEndings( "\n" );
+        text.ShouldBe( """
+            ## The publication
+
+            - Version: `1.0.0`
+            - Build: `1.0.0/abc/2026-11-27`
+            - Packages added by the deployment: `CK.Ng.AppHost.DesktopNgApp@0.0.1`
+            - Engines added to the Builder: *(none)*
+
+            """ );
     }
 
     [TestCase( "{}", "1.2.3", "has no '//ck-package Some.Extension@<version>' line" )]
