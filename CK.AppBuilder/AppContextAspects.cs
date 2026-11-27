@@ -81,14 +81,17 @@ static class AppContextAspects
             }
         }
         if( !success ) return false;
+        // The aspects of each App, described in the "architecture.md" of its host.
+        var architecture = new Dictionary<AppConfiguration, System.Text.StringBuilder>();
         foreach( var (name, (type, attr, apps)) in builderAspects.OrderBy( kv => kv.Key, StringComparer.OrdinalIgnoreCase ) )
         {
-            if( !TryCreate<IAppContextAspectApply>( monitor, context, sets.TypeCache, "AppContext aspect", name, type, attr, context.Aspects, allOptions, t => FindMissingAspect( t, null ), out var aspect ) )
+            if( !TryCreate<IAppContextAspectApply>( monitor, context, sets.TypeCache, "AppContext aspect", name, type, attr, context.Aspects, allOptions, t => FindMissingAspect( t, null ), out var aspect, out var description ) )
             {
                 success = false;
                 continue;
             }
             if( aspect == null ) continue;
+            foreach( var a in apps ) Describe( architecture, a, description );
             using( monitor.OpenTrace( $"AppContext aspect '{name}' ('{type.CSharpName}') for {apps.Select( a => a.ToString() ).Concatenate()}." ) )
             {
                 success &= Call( monitor, name, () => aspect.Apply( monitor, context, apps ) );
@@ -98,19 +101,29 @@ static class AppContextAspects
         {
             foreach( var (name, (type, attr)) in aspects.OrderBy( kv => kv.Key, StringComparer.OrdinalIgnoreCase ) )
             {
-                if( !TryCreate<IAppAspectApply>( monitor, context, sets.TypeCache, $"App aspect of {app}", name, type, attr, app.Aspects, appOptions.GetValueOrDefault( app ) ?? [], t => FindMissingAspect( t, app ), out var aspect ) )
+                if( !TryCreate<IAppAspectApply>( monitor, context, sets.TypeCache, $"App aspect of {app}", name, type, attr, app.Aspects, appOptions.GetValueOrDefault( app ) ?? [], t => FindMissingAspect( t, app ), out var aspect, out var description ) )
                 {
                     success = false;
                     continue;
                 }
                 if( aspect == null ) continue;
+                Describe( architecture, app, description );
                 using( monitor.OpenTrace( $"App aspect '{name}' ('{type.CSharpName}') of {app}." ) )
                 {
                     success &= Call( monitor, name, () => aspect.Apply( monitor, context, app ) );
                 }
             }
         }
+        foreach( var (app, b) in architecture ) app.AddArchitecture( "The aspects", b.ToString() );
         return success;
+
+        static void Describe( Dictionary<AppConfiguration, System.Text.StringBuilder> architecture, AppConfiguration app, string? description )
+        {
+            if( description == null ) return;
+            if( !architecture.TryGetValue( app, out var b ) ) architecture.Add( app, b = new System.Text.StringBuilder() );
+            else b.Append( '\n' );
+            b.Append( description );
+        }
 
         // An option of an aspect can require an aspect (its level or above: an AppContext aspect, an App aspect of its App):
         // "only with it", the required aspect must be present. Names the missing one, null when it is present.
@@ -152,9 +165,11 @@ static class AppContextAspects
                               AppAspects aspects,
                               IReadOnlyList<ConfigurableOptionModel> options,
                               Func<Type, string?> findMissingAspect,
-                              out T? aspect ) where T : class
+                              out T? aspect,
+                              out string? description ) where T : class
     {
         aspect = null;
+        description = null;
         var section = aspects.TryGetAspect( name );
         if( section != null && section.Value != null && bool.TryParse( section.Value, out var on ) && !on )
         {
@@ -228,6 +243,7 @@ static class AppContextAspects
         }
         // The options of the aspect: the ones of an owner type assignable from it, ordered, selected and created.
         Array? createdOptions = null;
+        var selectedNames = new List<string>();
         var applicable = options.Where( o => o.Owner.IsAssignableFrom( type.Type ) ).ToList();
         if( applicable.Count > 0 )
         {
@@ -249,6 +265,7 @@ static class AppContextAspects
                     monitor.Error( $"The {kind} '{name}' ('{type.CSharpName}') has enabled options ('{selected.Select( s => s.Option.Name ).Concatenate( "', '" )}') but its constructor doesn't receive them (an IReadOnlyList of its option interface)." );
                     return false;
                 }
+                selectedNames.AddRange( selected.Select( s => s.Option.Name ) );
                 createdOptions = Array.CreateInstance( optionsItemType, selected.Count );
                 for( int i = 0; i < selected.Count; i++ )
                 {
@@ -270,6 +287,17 @@ static class AppContextAspects
         try
         {
             aspect = (T)ctors[0].Invoke( args );
+            // Its description in the "architecture.md" of the hosts: its package, its options, its model (the defaults marked).
+            var d = new System.Text.StringBuilder();
+            d.Append( "### " ).Append( typeof( T ) == typeof( IAppContextAspectApply ) ? "AppContext aspect" : "App aspect" ).Append( " `" ).Append( name ).Append( '`' ).Append( '\n' ).Append( '\n' )
+             .Append( "Package: `" ).Append( type.Type.Assembly.GetName().Name ).Append( '`' ).Append( '\n' );
+            if( selectedNames.Count > 0 ) d.Append( '\n' ).Append( "Options: " ).Append( string.Join( ", ", selectedNames.Select( n => $"`{n}`" ) ) ).Append( '\n' );
+            if( model != null && ConfigurationModelDescription.TryGet( model.GetType(), out var modelDescription, out _ ) )
+            {
+                d.Append( '\n' );
+                ConfigurationModelMarkdown.AppendTable( d, modelDescription, model, aspectSection?.GetChildren().Select( c => c.Key ) ?? [] );
+            }
+            description = d.ToString();
             return true;
         }
         catch( TargetInvocationException ex ) when( ex.InnerException != null )

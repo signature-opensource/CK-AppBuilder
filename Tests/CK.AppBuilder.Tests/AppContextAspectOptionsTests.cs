@@ -154,10 +154,14 @@ public class AppContextAspectOptionsTests
     [Test]
     public void the_model_of_an_aspect_is_read_and_given_to_its_constructor()
     {
-        Run( """{ "Modeled": { "Level": 3 } }""" ).ShouldNotBeNull();
+        var context = Run( """{ "Modeled": { "Level": 3 } }""" ).ShouldNotBeNull();
         var c = ModeledAppAspect.Last.ShouldNotBeNull().Configuration;
         c.Level.ShouldBe( 3 );
         c.Label.ShouldBe( "none" );
+        // The architecture of the host describes the aspect: its package, its model (the defaults marked).
+        var (title, markdown) = context.Apps[0].Architecture.ShouldHaveSingleItem();
+        title.ShouldBe( "The aspects" );
+        markdown.ReplaceLineEndings( "\n" ).ShouldContain( "### App aspect `Modeled`\n\nPackage: `CK.AppBuilder.Tests`\n\n| Key | Value |\n|---|---|\n| Level | `3` |\n| Label | `none` *(default)* |\n" );
 
         using( TestHelper.Monitor.CollectTexts( out var texts ) )
         {
